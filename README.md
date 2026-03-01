@@ -4,6 +4,15 @@
 
 This project builds on a French randomized controlled trial (RCT) comparing public (CVE) and private (OPP) job-search counseling programs, conducted by Behagel et.al (2013). The objective is to move beyond average treatment effects and provide a high-dimensional, and policy-relevant evaluation of program performance and optimal allocation.
 
+## Context 
+This project was conducted as part of the Machine Learning for Econometrics course at ENSAE. 
+Contributors :
+- Salma El Aazdoudi
+- Lyna El Kamel
+- Stephane Kweke Ngahane
+- Sofiene Taamouti
+
+
 ---
 
 ## Project Overview
