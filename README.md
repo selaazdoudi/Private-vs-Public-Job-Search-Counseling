@@ -44,17 +44,13 @@ Beyond impact estimation, the project aims to derive optimal policy rules to all
 ```bash
 Who-When-and-Which-Program/
 ├── README.md
-├── requirements.txt
 ├── data/
 │   ├── raw/
 │   ├── processed/
 │   └── README.md
-├── src/
-|   |── part0_EDA/
+├── notebooks/
+|   |── partO_itt_EDA/
 │   ├── part1_itt_double_selection/
 │   ├── part2_late_dml/
-│   ├── part3_heterogeneity_grf/
-│   └── pipeline/
-├── notebooks/
-├── outputs/
-└── reports/
+│   └── part3_heterogeneity_grf/
+```
