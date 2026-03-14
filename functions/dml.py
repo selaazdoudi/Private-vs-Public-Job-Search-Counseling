@@ -314,3 +314,24 @@ def make_dml_final_table(
     })
 
     return out
+
+def stars(p):
+    if p < 0.01:
+        return "***"
+    elif p < 0.05:
+        return "**"
+    elif p < 0.10:
+        return "*"
+    return ""
+
+def fmt_coef_and_se(model, var):
+    coef = model.params[var]
+    se = model.bse[var]
+    pval = model.pvalues[var]
+    return f"{coef:.3f}{stars(pval)}", f"({se:.3f})"
+
+def fmt_iv_coef_and_se(model, var):
+    coef = model.params[var]
+    se = model.std_errors[var]
+    pval = model.pvalues[var]
+    return f"{coef:.3f}{stars(pval)}", f"({se:.3f})"
