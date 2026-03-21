@@ -2,34 +2,116 @@ import numpy as np
 import pandas as pd
 from sklearn.model_selection import cross_val_predict, KFold
 from scipy.stats import norm
+from tqdm.auto import tqdm
+import statsmodels.api as sm
+from sklearn.base import TransformerMixin, BaseEstimator
+from formulaic import Formula
 
-def dml_two_treatments(
-    X, D1, D2, y,
-    modely, modeld1, modeld2=None,
-    *, nfolds=5,
+class FormulaTransformer(TransformerMixin, BaseEstimator):
+    def __init__(self, formula, array=False):
+        self.formula = formula
+        self.array = array
+
+    def fit(self, X, y=None):
+        return self
+
+    def transform(self, X, y=None):
+        df = Formula(self.formula).get_model_matrix(X)
+        if self.array:
+            return df.values
+        return df
+
+
+def make_transformer(array=False):
+    formula = (
+        "0 "
+        "+ poly(age, degree=3, raw=True)"
+        "+ poly(exper, degree=3, raw=True)"
+        "+ poly(duree_listes_horsAR, degree=3, raw=True)"
+        "+ poly(nenf, degree=2, raw=True)"
+        "+ North + IdF + French + African + femme + marie"
+        "+ Interim + EndInterim + tempcomp"
+        "+ ce1 + ce2"
+        "+ nivetude3 + nivetude4"
+        "+ salaireB + salaireC + salaireD + salaireE"
+        "+ Q1 + Q2 + Q3"
+        "+ EconLayoff + PersLayoff"
+        "+ primo + Insertion"
+        "+ age:exper"
+        "+ femme:nenf"
+        "+ femme:exper"
+        "+ duree_listes_horsAR:exper"
+        "+ French:IdF"
+        "+ African:IdF"
+        "+ nivetude3:exper"
+        "+ nivetude4:exper"
+    )
+    return FormulaTransformer(formula=formula, array=array)
+
+
+def dml_single_treatment(
+    X, D, y, w,
+    modely, modeld,
+    *,
+    nfolds=5,
     classifier_y=False,
-    classifier_d1=False,
-    classifier_d2=False,
-    clu=None, cluster=True,
+    classifier_d=False,
     progress=True
 ):
     """
-    DML for Partially Linear Model with TWO treatments (D1, D2) using cross-fitting.
+    Double Machine Learning (DML) pour un modèle partiellement linéaire
+    avec un seul traitement D et un outcome y, via cross-fitting.
+
+    Paramètres
+    ----------
+    X : array-like ou DataFrame
+        Covariables.
+    D : array-like
+        Traitement.
+    y : array-like
+        Variable de résultat.
+    modely : estimator sklearn-compatible
+        Modèle pour estimer E[y | X].
+    modeld : estimator sklearn-compatible
+        Modèle pour estimer E[D | X].
+    nfolds : int, default=5
+        Nombre de folds pour le cross-fitting.
+    classifier_y : bool, default=False
+        Utiliser predict_proba pour modely si y est binaire.
+    classifier_d : bool, default=False
+        Utiliser predict_proba pour modeld si D est binaire.
+    clu : array-like, optional
+        Identifiants de clusters.
+    cluster : bool, default=True
+        Si True, erreurs standards clusterisées.
+    progress : bool, default=True
+        Afficher une barre de progression.
+
+    Returns
+    -------
+    point : float
+        Estimateur DML de l'effet de D sur y.
+    stderr : float
+        Erreur standard associée.
+    yhat : ndarray
+        Prédictions cross-fittées de y.
+    Dhat : ndarray
+        Prédictions cross-fittées de D.
+    resy : ndarray
+        Résidus de y.
+    resD : ndarray
+        Résidus de D.
+    epsilon : ndarray
+        Résidus de la régression finale.
+    ols_mod : RegressionResults
+        Objet statsmodels complet.
     """
 
-    if modeld2 is None:
-        modeld2 = modeld1
-
     y = np.asarray(y).ravel()
-    D1 = np.asarray(D1).ravel()
-    D2 = np.asarray(D2).ravel()
+    D = np.asarray(D).ravel()
 
-    cv = KFold(n_splits=nfolds, shuffle=True, random_state=123)
-
-    from tqdm.auto import tqdm
-    import statsmodels.formula.api as smf
-
-    pbar = tqdm(total=5, desc="DML steps", disable=not progress)
+    cv = KFold(n_splits=nfolds, shuffle=True, random_state=123) #crossfitting
+    pbar = tqdm(total=4, desc="DML steps", disable=not progress)#avancement
 
     def _supports_predict_proba(model):
         return hasattr(model, "predict_proba")
@@ -43,110 +125,85 @@ def dml_two_treatments(
                 return pred[:, 1]
             return np.asarray(pred).ravel()
 
-        return cross_val_predict(model, X, target, cv=cv, n_jobs=-1)
+        return np.asarray(
+            cross_val_predict(model, X, target, cv=cv, n_jobs=-1)
+        ).ravel()
 
+    # Étape 1 : nuisance function pour y
     yhat = _crossfit_hat(modely, X, y, use_proba=classifier_y)
     pbar.update(1)
 
-    D1hat = _crossfit_hat(modeld1, X, D1, use_proba=classifier_d1)
+    # Étape 2 : nuisance function pour D
+    Dhat = _crossfit_hat(modeld, X, D, use_proba=classifier_d)
     pbar.update(1)
 
-    D2hat = _crossfit_hat(modeld2, X, D2, use_proba=classifier_d2)
-    pbar.update(1)
-
+    # Étape 3 : résidualisation
     resy = y - yhat
-    resD1 = D1 - D1hat
-    resD2 = D2 - D2hat
+    resD = D - Dhat
 
     dml_data = pd.DataFrame({
         "resy": resy,
-        "resD1": resD1,
-        "resD2": resD2
+        "resD": resD,
+        "w": np.asarray(w).astype(float)
     })
     pbar.update(1)
 
-    if cluster:
-        if clu is None:
-            raise ValueError("cluster=True but clu is None. Provide cluster ids in clu.")
-        dml_data["clu"] = np.asarray(clu)
-
-        ols_mod = smf.ols("resy ~ 1 + resD1 + resD2", data=dml_data).fit(
-            cov_type="cluster",
-            cov_kwds={"groups": dml_data["clu"]}
-        )
-    else:
-        ols_mod = smf.ols("resy ~ 1 + resD1 + resD2", data=dml_data).fit()
+    # Étape 4 : régression finale pondérée
+    resD_cst = sm.add_constant(dml_data["resD"])
+    ols_mod = sm.WLS(dml_data["resy"], resD_cst, weights=dml_data["w"]).fit()
 
     pbar.update(1)
     pbar.close()
 
-    point1 = ols_mod.params["resD1"]
-    point2 = ols_mod.params["resD2"]
-    stderr1 = ols_mod.bse["resD1"]
-    stderr2 = ols_mod.bse["resD2"]
+    point = ols_mod.params["resD"]
+    stderr = ols_mod.bse["resD"]
     epsilon = ols_mod.resid
 
-    return (
-        point1, point2, stderr1, stderr2,
-        yhat, D1hat, D2hat,
-        resy, resD1, resD2,
-        epsilon
-    )
+    return point, stderr, yhat, Dhat, resy, resD, epsilon, ols_mod
 
-
-def summary_two_treatments(
-    point1, point2, stderr1, stderr2,
-    yhat, D1hat, D2hat, resy, resD1, resD2, epsilon,
-    X, D1, D2, y,
-    *, name1="D1", name2="D2", binary_y=None,
-    binary_d1=None, binary_d2=None
+def summary_single_treatment(
+    point, stderr,
+    yhat, Dhat, resy, resD, epsilon,
+    X, D, y,
+    *, name="D", binary_y=None, binary_d=None
 ):
     """
-    Summary function for DML with two treatments.
-    Returns a DataFrame with one row per treatment.
+    Summary function for DML with one treatment.
+    Returns a DataFrame with one row for the treatment.
     """
 
     y = np.asarray(y).ravel()
-    D1 = np.asarray(D1).ravel()
-    D2 = np.asarray(D2).ravel()
+    D = np.asarray(D).ravel()
 
-    if binary_d1 is None:
-        unique_d1 = np.unique(D1[~pd.isna(D1)])
-        binary_d1 = len(unique_d1) <= 2 and set(unique_d1).issubset({0, 1})
-
-    if binary_d2 is None:
-        unique_d2 = np.unique(D2[~pd.isna(D2)])
-        binary_d2 = len(unique_d2) <= 2 and set(unique_d2).issubset({0, 1})
+    if binary_d is None:
+        unique_d = np.unique(D[~pd.isna(D)])
+        binary_d = len(unique_d) <= 2 and set(unique_d).issubset({0, 1})
 
     if binary_y is None:
         unique_y = np.unique(y[~pd.isna(y)])
         binary_y = len(unique_y) <= 2 and set(unique_y).issubset({0, 1})
 
     rmse_y = np.sqrt(np.mean(resy**2))
+    rmse_d = np.sqrt(np.mean(resD**2))
     rmse_eps = np.sqrt(np.mean(epsilon**2))
 
-    rmse_d1 = np.sqrt(np.mean(resD1**2))
-    rmse_d2 = np.sqrt(np.mean(resD2**2))
-
-    acc_d1 = np.mean(np.abs(resD1) < 0.5) if binary_d1 else np.nan
-    acc_d2 = np.mean(np.abs(resD2) < 0.5) if binary_d2 else np.nan
     acc_y = np.mean(np.abs(resy) < 0.5) if binary_y else np.nan
+    acc_d = np.mean(np.abs(resD) < 0.5) if binary_d else np.nan
 
     return pd.DataFrame({
-        "estimate": [point1, point2],
-        "stderr": [stderr1, stderr2],
-        "lower": [point1 - 1.96 * stderr1, point2 - 1.96 * stderr2],
-        "upper": [point1 + 1.96 * stderr1, point2 + 1.96 * stderr2],
-        "rmse y": [rmse_y, rmse_y],
-        "accuracy y": [acc_y, acc_y],
-        "rmse D": [rmse_d1, rmse_d2],
-        "accuracy D": [acc_d1, acc_d2],
-        "rmse final": [rmse_eps, rmse_eps],
-        "n": [len(y), len(y)],
-    }, index=[name1, name2])
+        "estimate": [point],
+        "stderr": [stderr],
+        "lower": [point - 1.96 * stderr],
+        "upper": [point + 1.96 * stderr],
+        "rmse y": [rmse_y],
+        "accuracy y": [acc_y],
+        "rmse D": [rmse_d],
+        "accuracy D": [acc_d],
+        "rmse final": [rmse_eps],
+        "n": [len(y)],
+    }, index=[name])
 
-
-def run_dml_grid(X, y, D1, D2, learners_y, learners_d, nfolds=5):
+def run_dml_grid(X, y, D, w, learners_y, learners_d, nfolds=5):
     results_summary = []
     models = {}
 
@@ -154,42 +211,38 @@ def run_dml_grid(X, y, D1, D2, learners_y, learners_d, nfolds=5):
         for name_d, learner_d in learners_d.items():
             print(f"Running combination: {name_y} / {name_d}")
 
-            dml_out = dml_two_treatments(
+            dml_out = dml_single_treatment(
                 X=X,
-                D1=D1,
-                D2=D2,
+                D=D,
                 y=y,
+                w=w,
                 modely=learner_y,
-                modeld1=learner_d,
-                modeld2=learner_d,
+                modeld=learner_d,
                 nfolds=nfolds,
                 classifier_y=True,
-                classifier_d1=True,
-                classifier_d2=True,
-                cluster=False
+                classifier_d=True,
+                progress=True
             )
 
             (
-                point1, point2, stderr1, stderr2,
-                yhat, D1hat, D2hat,
-                resy, resD1, resD2,
-                epsilon
+                point, stderr,
+                yhat, Dhat,
+                resy, resD,
+                epsilon,
+                ols_mod
             ) = dml_out
 
-            summ = summary_two_treatments(
-                point1, point2, stderr1, stderr2,
-                yhat, D1hat, D2hat,
-                resy, resD1, resD2, epsilon,
-                X, D1, D2, y,
-                name1="CVE_treated",
-                name2="OPP_treated"
+            summ = summary_single_treatment(
+                point, stderr,
+                yhat, Dhat,
+                resy, resD, epsilon,
+                X, D, y,
+                name="treated"
             ).reset_index(names="treatment")
 
-            rmse_d1 = np.sqrt(np.mean(resD1**2))
-            rmse_d2 = np.sqrt(np.mean(resD2**2))
+            rmse_d = np.sqrt(np.mean(resD**2))
 
-            summ["rmse D1"] = rmse_d1
-            summ["rmse D2"] = rmse_d2
+            summ["rmse D"] = rmse_d
             summ["learner_y"] = name_y
             summ["learner_d"] = name_d
 
@@ -197,18 +250,18 @@ def run_dml_grid(X, y, D1, D2, learners_y, learners_d, nfolds=5):
 
             models[f"{name_y}__{name_d}"] = {
                 "summary": summ,
-                "raw_output": dml_out
+                "raw_output": dml_out,
+                "ols_mod": ols_mod
             }
 
     results_summary = pd.concat(results_summary, ignore_index=True)
 
     results_summary = results_summary.sort_values(
-        by=["rmse y", "rmse D1", "rmse D2"],
+        by=["rmse y", "rmse D"],
         ascending=True
     )
 
-    return results_summary
-
+    return results_summary, models
 
 def select_best_learners(results_summary, verbose=True):
     """
