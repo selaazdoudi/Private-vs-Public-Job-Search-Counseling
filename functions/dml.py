@@ -265,7 +265,7 @@ def run_dml_grid(X, y, D, w, learners_y, learners_d, nfolds=5):
 
 def select_best_learners(results_summary, verbose=True):
     """
-    Select the best learners for Y, D1 and D2 based on mean RMSE.
+    Select the best learners for Y and D based on mean RMSE.
     """
 
     best_y = (
@@ -275,41 +275,28 @@ def select_best_learners(results_summary, verbose=True):
         .sort_values("rmse y")
     )
 
-    best_d1 = (
+    best_d = (
         results_summary
-        .groupby("learner_d", as_index=False)["rmse D1"]
+        .groupby("learner_d", as_index=False)["rmse D"]
         .mean()
-        .sort_values("rmse D1")
-    )
-
-    best_d2 = (
-        results_summary
-        .groupby("learner_d", as_index=False)["rmse D2"]
-        .mean()
-        .sort_values("rmse D2")
+        .sort_values("rmse D")
     )
 
     best_learner_y = best_y.iloc[0]["learner_y"]
-    best_learner_d1 = best_d1.iloc[0]["learner_d"]
-    best_learner_d2 = best_d2.iloc[0]["learner_d"]
+    best_learner_d = best_d.iloc[0]["learner_d"]
 
     if verbose:
         print("Best learner for Y:")
         print(best_y.to_string(index=False))
 
-        print("\nBest learner for D1:")
-        print(best_d1.to_string(index=False))
-
-        print("\nBest learner for D2:")
-        print(best_d2.to_string(index=False))
+        print("\nBest learner for D:")
+        print(best_d.to_string(index=False))
 
         print("\nSelected learners:")
-        print("Y  =", best_learner_y)
-        print("D1 =", best_learner_d1)
-        print("D2 =", best_learner_d2)
+        print("Y =", best_learner_y)
+        print("D =", best_learner_d)
 
-    return best_learner_y, best_learner_d1, best_learner_d2
-
+    return best_learner_y, best_learner_d
 
 def stars_from_pvalue(p):
     if p < 0.01:
