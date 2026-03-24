@@ -1,0 +1,371 @@
+---
+title: "Heterogeneity Analysis"
+format:
+  pdf:
+    include-before-body: cover.tex
+    classoption: titlepage
+    papersize: a4paper
+    geometry: 
+    - margin = 2.1cm
+    keep-tex: true
+    include-in-header:
+      text: |
+        % load fvextra for wrapping in verbatim environments
+        \renewcommand{\maketitle}{}
+        \usepackage{fvextra}
+        % redefine the Highlighting environment (used for code chunks)
+        \DefineVerbatimEnvironment{Highlighting}{Verbatim}{breaklines,breakanywhere,commandchars=\\\{\}}
+        % define an OutputCode environment for printed output
+        \DefineVerbatimEnvironment{OutputCode}{Verbatim}{breaklines,breakanywhere,commandchars=\\\{\}}
+
+editor: visual
+
+execute:
+  cache: true
+  warning: false
+  error:   false 
+  message: false
+---
+
+```{r, echo=FALSE}
+
+#Downloading necessary packages
+
+packages <- c(
+  "readxl",
+  "glmnet",
+  "haven",
+  "tidyverse",
+  "grf",
+  "ranger",
+  "pROC",
+  "lmtest",
+  "sandwich",
+  "AER"
+)
+
+to_install <- packages[!packages %in% installed.packages()[, "Package"]]
+
+if (length(to_install) > 0) {
+  install.packages(to_install)
+}
+
+invisible(lapply(packages, library, character.only = TRUE))
+
+#Loading libraries
+library(readxl)
+library(glmnet)
+library(haven)
+library(tidyverse)
+library(grf)
+library(ranger)
+library(pROC)
+library(lmtest)
+library(sandwich)
+library(AER)
+```
+
+# Investigating parking behavior
+
+This notebook will present the work that we have done to investigate whether private providers of job counseling have been prone to parking behavior. The latter is defined as providing little efforts to job seekers who are harder to help in order to keep costs down while instead focusing on individuals with better prospects. The contracts with the State at the time included an upfront payment for each job seeker enrolled and another payment whenever a job was found within six months. If that last payment cannot compensate private firms' efforts, then they might go on to cash in the upfront payment and do little efforts for harder-to-place individuals. Detection of parking behavior would therefore matter because it might prompt the State to renegotiate the contracts in order to place the right incentives into them and deliver better prospects to the unemployed.
+
+## 1. Institutional Setup and Notation
+
+Individuals are randomly assigned to be offered the private counseling program (OPP). Let:
+
+-   $( Z_i \in {0,1} )$ denote assignment to OPP,
+
+-   $( D_i \in {0,1} )$ denote actual participation (take-up),
+
+-   $( Y_i \in {0,1} )$ denote employment at 6 months.
+
+Due to non-compliance, assignment does not perfectly determine treatment status. Therefore, assignment $(Z_i)$ will be used as an instrument for actual participation $(D_i)$. Under standard assumptions (random assignment, monotonicity, and exclusion), the instrumental variable (IV) strategy identifies a Local Average Treatment Effect (LATE) for compliers.
+
+## 2. Empirical strategy
+
+#### Constructing an Ex Ante Employability Score
+
+To capture individuals’ baseline employability, we construct a prediction score $s(X_i)$, intended to approximate:
+
+$s(X_i) = \mathbb{E}[Y_i \mid X_i, Z_i = 0]$
+
+This score represents the probability of employment in the absence of assignment to OPP.
+
+The score is estimated using a machine learning model trained on the subset of individuals who are not assigned to OPP and do not take up treatment. This ensures that the score reflects untreated potential outcomes as closely as possible.
+
+The trained model is then used to generate predicted values $\hat{s}(X_i)$ for all individuals in the sample.
+
+Starting off the modeling, we use an external script to reformat the data as to make it easier to process.
+
+```{r}
+source("Reprocessing_data_for_heterogeneity.R")
+
+#We restrict the sample to those who have been assigned to OPP or the control group. We also exclude the always-takers who have been assigned to the control group but took the OPP treatment anyway.
+training_data <- data %>%
+  filter(CVE == 0) %>%
+  filter(acceptationCVE == 0)
+```
+
+We then proceed to use the lasso regression to train a scoring algorithm. In particular, we train the model on 70% of the data and then we use the remaining 30% to test out of sample. We will plot the ROC curve and provide the Area Under the Curve (AUC) to evaluate the performance of the classifier.
+
+```{r}
+#Classifier only trained on control group
+ctrl <- training_data$OPP == 0
+
+data_ctrl <- training_data[ctrl, ]
+
+set.seed(31)
+#Split the data into training and testing
+id_train <- sample(seq_len(nrow(data_ctrl)), size = 0.7 * nrow(data_ctrl))
+
+train_ctrl <- data_ctrl[id_train, ]
+test_ctrl  <- data_ctrl[-id_train, ]
+
+X_train <- model.matrix(~ . - 1, data = train_ctrl[, covars])   
+Y_train <- as.numeric(train_ctrl$EMPLOI_6MOIS)
+
+X_test <- model.matrix(~ . - 1, data = test_ctrl[, covars])
+Y_test <- as.numeric(test_ctrl$EMPLOI_6MOIS)
+
+#Weights
+w_train <- as.numeric(train_ctrl$POIDS_PZ_6MOIS)
+
+#Fit the lasso model
+lasso <- cv.glmnet(
+  x = X_train,
+  y = Y_train,
+  alpha = 1,
+  family = "binomial",
+  weights = w_train
+)
+
+pred_test <- predict(
+  lasso,
+  newx = X_test,
+  s = "lambda.min",
+  type = "response"
+)
+
+pred_test <- predict(lasso, newx = X_test, type = "response")
+
+#we set aside variables retained by the lasso regression
+
+coef_min <- coef(lasso, s = "lambda.min")
+
+vars_retained_min <- rownames(coef_min)[as.vector(coef_min != 0)]
+vars_retained_min <- setdiff(vars_retained_min, "(Intercept)")
+
+```
+
+```{r}
+auc_val <- roc(Y_test, as.vector(pred_test))$auc
+
+roc_obj <- roc(Y_test, pred_test)
+
+roc_df <- data.frame(
+  FPR = 1 - roc_obj$specificities,
+  TPR = roc_obj$sensitivities
+) |>
+  dplyr::arrange(FPR, TPR)
+
+perfect_df <- data.frame(
+  FPR = c(0, 0, 1),
+  TPR = c(0, 1, 1)
+)
+
+ggplot(roc_df, aes(x = FPR, y = TPR)) +
+  geom_line(linewidth = 1.2) +
+  geom_abline(
+    intercept = 0, slope = 1,
+    linetype = "dashed", linewidth = 0.8
+  ) +
+  geom_path(
+    data = perfect_df,
+    aes(x = FPR, y = TPR),
+    linetype = "dotted", linewidth = 1
+  ) +
+  labs(
+    title = "ROC Curve",
+    subtitle = paste0("AUC = ", round(as.numeric(auc(roc_obj)), 3)),
+    x = "False Positive Rate",
+    y = "True Positive Rate"
+  ) +
+  coord_equal() +
+  theme_minimal(base_size = 13) +
+  theme(
+    plot.title = element_text(face = "bold"),
+    panel.grid.minor = element_blank(),
+    legend.position = "none"
+  )
+```
+
+The Area Under the ROC Curve (AUC) measures how well the model can distinguish between individuals who experience the outcome and those who do not. It can be interpreted as follows: if we randomly pick one individual who finds a job and one who does not, the AUC is the probability that the model assigns a higher predicted score to the individual who finds a job. An AUC of 0.5 corresponds to random ranking, while an AUC of 1 indicates perfect discrimination. In our case, an AUC of 0.62 means that the model ranks such pairs correctly about 62% of the time, which reflects decent but limited predictive power. Multiple classifiers were tested here such as random forest, XGboost, logistic regression but all performed similarly. We attribute this to lack of better predictive data. This is a limit of our approach. However, we kept the lasso regression because it will be useful to select relevant control variables later in the analysis.
+
+We now generate scores for the whole sample.
+
+```{r}
+s0 <- predict(
+  lasso,
+  newx = model.matrix(~ . - 1, data = training_data[, covars]),
+  s = "lambda.min",
+  type = "response"
+)
+```
+
+#### Defining Heterogeneity Groups
+
+Individuals are sorted into quantiles (typically quartiles) of the estimated score $( \hat{s}(X_i) )$. These groups capture increasing levels of ex ante employability:
+
+-   $( Q1 )$: lowest employability,
+
+-   $( Q4 )$: highest employability.
+
+These quantiles form the basis for all subsequent heterogeneity analysis.
+
+```{r}
+q_s0 <- quantile(as.matrix(s0), p = c(0.25, 0.5, 0.75))
+
+training_data <- training_data %>%
+  mutate(baseline_score = s0,
+         gate_group = case_when(
+           baseline_score <= q_s0["25%"] ~ "Q1",
+           q_s0["25%"] < baseline_score & baseline_score <= q_s0["50%"] ~ "Q2",
+           q_s0["50%"] < baseline_score & baseline_score <= q_s0["75%"] ~ "Q3",
+           q_s0["75%"] < baseline_score ~ "Q4"
+         ))
+```
+
+#### Estimating ITT, First Stage IV regression, and LATE by score quantile
+
+To assess how the program affects different types of individuals, we estimate treatment effects separately by score quantile. First, we estimate the intention-to-treat (ITT) effect within each quantile:
+
+$$
+Y_i = \sum_{q=1}^{4} \alpha_q \mathbf{1}{(Q_i = q}) + \sum_{q=1}^{4} \delta_q Z_i \mathbf{1}{(Q_i = q}) + \varepsilon_i
+$$
+
+where :
+
+-   $\alpha_q = \mathbb{E}[Y_i \mid Z_i = 0, Q_i = q]$
+
+-   $\delta_q = \mathbb{E}[Y_i \mid Z_i = 1, Q_i = q] - \mathbb{E}[Y_i \mid Z_i = 0, Q_i = q]$
+
+The parameter $\delta_q$ correspond to the Intention-to-Treat effect in quartile $q$. We estimate the model below, with heteroskedastic-robust (HR) standard errors.
+
+```{r}
+#We remove a few control variables that cause an issue due to how we estimated the lasso model
+vars_to_drop <- c("rsqstat21", "rsqstat31", "Orsqstat1", "Otemp")
+
+vars_retained_final <- setdiff(vars_retained_min, vars_to_drop)
+
+#ITT estimation by quartile, with control variables selected from the lasso model
+form_itt <- as.formula(
+  paste(
+    "EMPLOI_6MOIS ~ 0 + factor(gate_group) + OPP:factor(gate_group) +",
+    paste(vars_retained_final, collapse = " + ")
+  )
+)
+
+mod_itt <- lm(
+  form_itt,
+  weights = POIDS_PZ_6MOIS,
+  data = training_data
+)
+
+coeftest(mod_itt, vcov = vcovHC(mod_itt, type = "HC1"))
+```
+
+The ITT estimates are given by the coefficients of `factor(gate_groupe)QX:OPP`. We can conclude from those results that being assigned to take the OPP program increases employment by 3.3 percentage points (p.p) in the first quartile (lowest ex-ante employability) and by 2.9 p.p in the second quartile. The effects for the most employable individuals are non significant. However, in the presence of non-compliance, these differences may also reflect variations in take-up rates across score quantiles. In addition, in presence of low-compliance, ITTs offer little information about the heterogeneity of treatment among those treated.
+
+We therefore move to estimate the LATE for each quartile. We estimate the following regression:
+
+$$
+Y_i = \sum_{q=1}^{4} \alpha_q \mathbf{1}\{G_i = q\}+ \sum_{q=1}^{4} \beta_q D_i \cdot \mathbf{1}\{G_i = q\}+ \varepsilon_i
+$$
+
+by instrumenting the endogenous treatment variable, $D_i$, with $Z_i$, the assignment variable of the Randomized Control Trial. We start with the first stage regression below.
+
+```{r}
+#First stage IV estimation, with control variables selected from the lasso model
+form_fs <- as.formula(
+  paste(
+    "acceptationOPP ~ 0 + factor(gate_group) + OPP:factor(gate_group) +",
+    paste(vars_retained_final, collapse = " + ")
+  )
+)
+
+mod_fs <- lm(
+  form_fs,
+  weights = POIDS_PZ_6MOIS,
+  data = training_data
+)
+
+coeftest(mod_fs, vcov = vcovHC(mod_fs, type = "HC1"))
+```
+
+The relevant coefficients are the interactions between assignment and gate-group dummies (`factor(gate_group)Q1:OPP` to `Q4:OPP`), which measure compliance, that is how assignment translates into actual treatment take-up within each quartile. Their values are all close to 0.40, implying that assignment increases participation in OPP by about 40 percentage points in every group. This indicates that compliance is strong and, importantly, very similar across quartiles. As a result, differences in ITT estimates across gate groups cannot be attributed to differences in compliance rates, but rather reflect genuine heterogeneity in treatment effects. In other words, since the first stage is essentially constant across groups, the variation in ITTs seem to reflect variation in the underlying causal effects.
+
+Finally, we estimate the second stage and retrieve LATE estimates for each score quantile.
+
+```{r}
+#2SLS estimation of the LATE for each quartile of scoring, with control variables selected from the lasso model
+
+form_iv <- as.formula(
+  paste(
+     "EMPLOI_6MOIS ~ 0 + factor(gate_group) + acceptationOPP:factor(gate_group) +",
+     paste(vars_retained_final, collapse = " + "), paste("|", paste(vars_retained_final, collapse = " + "), "+ factor(gate_group) + OPP:factor(gate_group)")
+     )
+)
+
+mod_iv <- ivreg(
+  form_iv,
+  weights = POIDS_PZ_6MOIS,
+  data = training_data
+)
+
+coeftest(mod_iv, vcov = vcovHC(mod_iv, type = "HC1"))
+```
+
+The relevant coefficients are the interactions `factor(gate_group)Q1:acceptationOPP` to `Q4:acceptationOPP`, since they are the LATEs within each quartile. The estimates are positive and statistically significant in Q1 and Q2, around 0.08 and 0.07, which means that for compliers in the lower quartiles, participation in OPP raises the probability of employment by about 7 to 8 percentage points. By contrast, the estimates in Q3 and Q4 are close to zero and not statistically significant, suggesting no detectable effect there.
+
+So the main takeaway is that the gains from OPP seem concentrated in the lower quartiles, while the upper quartiles do not benefit much. Combined with first-stage results, this is important: since compliance was roughly constant across quartiles, this pattern cannot be explained by stronger take-up in Q1–Q2. It instead points to probable genuine heterogeneity in causal effects. This also helps reinterpret the ITTs: the larger ITTs in the lower quartiles were not driven by differential compliance, but by larger treatment effects among compliers in those groups.
+
+All in all, the program benefits the most disadvantaged individuals the most. Since parking would predict stronger effects among the easiest cases, the evidence instead points in the opposite direction.
+
+#### Alternative approach: CATEs estimation
+
+As a robustness check, we estimate conditional local average treatment effects (CLATE) using an instrumental random forest. This approach is useful because, unlike the baseline IV specification, it does not restrict treatment-effect heterogeneity to vary only across predefined score quartiles, but instead allows for variation at the individual level and for flexible non-linearities. We then average the predicted CLATEs within each score quartile to recover an interpretable group-level pattern.
+
+We start by defining the quantities of interest.
+
+```{r}
+X <- as.matrix(training_data[, covars]) #control variables
+Y <- training_data$EMPLOI_6MOIS         #target variable
+W <- training_data$acceptationOPP     # actual take-up
+Z <- training_data$OPP                # randomized assignment
+```
+
+Then we estimate the CLATE using the `instrumental_forest` and we store the individual predictions in `tau_hat`. Note that running time might be a bit long depending on your hardware.
+
+```{r}
+iv_forest <- instrumental_forest(X = model.matrix( ~ . - 1, data = training_data[, covars]),
+                                 Y = training_data$EMPLOI_6MOIS %>% as.numeric(),
+                                 W = training_data$acceptationOPP %>% as.numeric(),
+                                 Z = training_data$OPP %>% as.numeric(),
+                                 sample.weights = training_data$POIDS_PZ_6MOIS %>%
+                                   as.numeric())
+
+tau_hat <- predict(iv_forest)$predictions
+```
+
+We show below the mean CLATE for each score quantile:
+
+```{r}
+df_CLATE <- data.frame(
+  tau_hat = tau_hat,
+  score_q = training_data$gate_group
+)
+
+aggregate(tau_hat ~ score_q, data = df_CLATE, mean)
+```
+
+Because the instrumental forest identifies conditional local average treatment effects, predicted values for the full sample should be interpreted as local complier effects associated with given covariate profiles, rather than treatment effects for all individuals. In any case, the results show positive effects in all quartiles, with the largest average effect in the lowest-score group. This confirms that treatment gains are not concentrated among the highest-score individuals and therefore provides no support for a parking interpretation.
