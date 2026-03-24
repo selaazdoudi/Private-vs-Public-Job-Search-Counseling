@@ -98,7 +98,7 @@ The trained model is then used to generate predicted values $\hat{s}(X_i)$ for a
 Starting off the modeling, we use an external script to reformat the data as to make it easier to process.
 
 ```{r}
-source("Reprocessing_data_for_heterogeneity.R")
+source("Support scripts/data_for_heterogeneity.R")
 
 #We restrict the sample to those who have been assigned to OPP or the control group. We also exclude the always-takers who have been assigned to the control group but took the OPP treatment anyway.
 training_data <- data %>%
