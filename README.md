@@ -3,11 +3,6 @@
 
 This project revisits a French randomized controlled trial (RCT) on intensive job-search counseling, comparing a **public program** (CVE, run by ANPE) and a **private program** (OPP, outsourced and funded by Unédic). The project is based on the institutional setting studied by Behaghel et al. and asks a broader question: **does intensive counseling improve employment outcomes, how should we identify its causal effect when take-up is selective, and do treatment effects differ across individuals?**
 
-Rather than stopping at average effects, we use modern machine learning tools to address three central issues:
-1. the gap between **random assignment** and **actual program take-up**,
-2. the need to estimate treatment effects under **selection on observables**, and
-3. the possibility of **heterogeneous treatment effects**, especially in the private program.
-
 ## Context
 
 This project was conducted as part of the **Machine Learning for Econometrics** course at **ENSAE / École Polytechnique**.
@@ -36,10 +31,9 @@ The original experiment includes about **43,977 individuals**. Assignment to CVE
 ## Research Question
 
 Our project asks:
-
+- Methodologically, can we recover RCT causal effects using a DML approach?
 - Does intensive job-search counseling increase exit to employment?
 - How do the **public (CVE)** and **private (OPP)** programs compare?
-- Can we recover causal effects when **take-up is not randomized**?
 - Do treatment effects vary across individuals, and is there evidence consistent with **parking** in the private program?
 
 The outcomes of interest are employment at **3, 6, 9, and 12 months**.
@@ -60,18 +54,13 @@ These descriptive results motivate the empirical strategy developed in the rest 
 
 ### Part II — Average Treatment Effect on the Treated via Double Machine Learning
 
-Our main empirical strategy focuses on individuals **within each assigned programme arm**. In other words, among those assigned to CVE or OPP, some take up treatment and others do not. We compare these treated and non-treated individuals **within the assigned group**, rather than relying only on the standard-track control group.
+Our main empirical strategy focuses on individuals **within each assigned programme arm**. In other words, among those assigned to CVE or OPP, some take up treatment and others do not. We compare these treated and non-treated individuals **within the assigned group**, rather than relying on the standard-track control group. The goal is to see if we can recover the RCT ATET estimation.
 
 This approach requires a **selection-on-observables** assumption:
 
-Under this assumption, and after controlling flexibly for baseline characteristics \(X\), we can recover the causal effect of actual participation on the treated.
+Under this assumption, and after controlling flexibly for baseline characteristics, we can recover the causal effect of actual participation on the treated.
 
 To do so, we use a **Double Machine Learning (DML)** procedure based on a **partially linear model**:
-
-DML allows us to:
-- control for many covariates in a flexible, data-driven way,
-- reduce specification dependence,
-- and estimate treatment effects under high-dimensional confounding.
 
 We compare this approach to more standard econometric methods such as OLS and IV.
 
