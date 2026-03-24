@@ -63,17 +63,10 @@ These descriptive results motivate the empirical strategy developed in the rest 
 Our main empirical strategy focuses on individuals **within each assigned programme arm**. In other words, among those assigned to CVE or OPP, some take up treatment and others do not. We compare these treated and non-treated individuals **within the assigned group**, rather than relying only on the standard-track control group.
 
 This approach requires a **selection-on-observables** assumption:
-\[
-Y(0), Y(1) \perp D \mid X
-\]
 
 Under this assumption, and after controlling flexibly for baseline characteristics \(X\), we can recover the causal effect of actual participation on the treated.
 
 To do so, we use a **Double Machine Learning (DML)** procedure based on a **partially linear model**:
-
-\[
-Y = \beta D + g(X) + \varepsilon
-\]
 
 DML allows us to:
 - control for many covariates in a flexible, data-driven way,
@@ -107,17 +100,10 @@ Our presentation highlights several results:
 
 - Treatment take-up is clearly **non-random within assigned arms**, and baseline covariates significantly predict participation.
 - This makes flexible adjustment for observables central to identification.
+- DML is somewhat sensitive, and the gap between DML and IV is a reason to worry that omitted variables may still matter
 - In the heterogeneity analysis for OPP, grouped IV results suggest somewhat stronger effects for lower baseline-score quartiles.
 - However, the machine-learning heterogeneity results remain **fairly similar across quartiles**, with only slightly larger effects in the lowest quartile.
 - Overall, we find **no strong evidence of parking** in the private program.
-
----
-
-## Policy Relevance
-
-This project contributes to a policy-relevant question: not only whether intensive counseling works, but also **for whom** it works, and if public and private provision provide services differently across job-seeker profiles.
-
-More broadly, the project illustrates how **causal machine learning methods** can be used to revisit a classic labour-market policy setting with non-compliance, high-dimensional covariates, and potentially heterogeneous effects.
 
 ---
 
