@@ -2,7 +2,7 @@ library(readr)
 library(dplyr)
 
 # load data
-df <- read_csv("data/df_eda_clean.csv")
+df <- read_csv("data/processed/df_eda_clean.csv")
 data <- df
 
 # region variables
